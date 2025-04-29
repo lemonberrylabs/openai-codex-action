@@ -1,0 +1,142 @@
+# .github/workflows/ai_code_generator_openai_codex_cli.yml
+name: AI Code Gen (@openai/codex Node CLI) and PR
+
+# Trigger manually from the Actions tab
+on:
+  workflow_dispatch:
+    inputs:
+      branch_name:
+        description: 'The branch to base the changes on'
+        required: true
+        default: 'main' # Or your default branch
+      # The prompt for this CLI in auto mode should describe the task
+      prompt:
+        description: 'The prompt/instruction for the AI task (e.g., "Refactor the main function in src/index.js for clarity")'
+        required: true
+        default: 'Refactor the main function in src/index.js for clarity.'
+      # Approval mode based on the README (-a flag)
+      approval_mode:
+        description: 'Approval mode for the codex CLI'
+        required: true
+        default: 'full-auto' # Options: suggest, auto-edit, full-auto
+        type: choice
+        options:
+        - suggest
+        - auto-edit
+        - full-auto
+
+jobs:
+  generate_and_pr:
+    runs-on: ubuntu-latest
+    # Grant permissions to write contents (commit/push) and create pull requests
+    permissions:
+      contents: write
+      pull-requests: write
+
+    steps:
+      # 1. Check out the specific branch provided as input
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.branch_name }}
+          # Fetch depth 0 is needed for branch creation/comparison later
+          fetch-depth: 0
+
+      # 2. Set up Node.js (Use version 22+ as per README)
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22' # README specifies Node.js 22 or newer
+
+      # 3. Install the @openai/codex CLI globally
+      - name: Install @openai/codex CLI
+        run: npm install -g @openai/codex
+        # Note: README states this is experimental.
+
+      # 4. Run the @openai/codex CLI
+      #    Uses non-interactive mode (-q) and the specified approval mode (-a).
+      #    Passes the prompt directly as an argument.
+      #    Assumes the CLI modifies files in the workspace based on the prompt and mode.
+      - name: Run @openai/codex CLI
+        id: ai_run
+        env:
+          # The CLI reads the API key from this environment variable
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          # Set quiet mode for CI as per README recommendation
+          CODEX_QUIET_MODE: 1
+          # Get prompt and approval mode from inputs
+          AI_PROMPT: ${{ github.event.inputs.prompt }}
+          APPROVAL_MODE: ${{ github.event.inputs.approval_mode }}
+        run: |
+          echo "Running @openai/codex CLI..."
+          echo "Prompt: $AI_PROMPT"
+          echo "Approval Mode: $APPROVAL_MODE"
+          echo "-----------------------------------------------------"
+          echo "WARNING: Using experimental @openai/codex CLI."
+          echo "-----------------------------------------------------"
+
+          # Execute the command based on README examples for non-interactive mode
+          # Uses -a for approval mode and passes the prompt string.
+          # The -q flag might be redundant if CODEX_QUIET_MODE=1 is set, but include for clarity.
+          codex -a "$APPROVAL_MODE" -q "$AI_PROMPT"
+
+          # Check the exit code of the codex command (optional but recommended)
+          if [ $? -ne 0 ]; then
+            echo "Error: '@openai/codex' command failed. Check logs above."
+            # Decide if failure should stop the workflow
+            exit 1
+          fi
+
+          echo "@openai/codex command finished. The commit step will check for file modifications."
+
+
+      # 5. Commit and Push Changes to a New Branch
+      - name: Commit and Push changes
+        id: commit_push # Give step an ID for outputs
+        run: |
+          # Configure Git
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          # Create a new branch name (unique per run)
+          NEW_BRANCH_NAME="ai-codexcli-${{ github.run_id }}"
+          git checkout -b $NEW_BRANCH_NAME
+
+          # Check if ANY files were modified by the codex command.
+          # Use 'git status --porcelain' which lists modified/added/etc files.
+          if git status --porcelain | grep -qE '^[ MADRCU]'; then
+             echo "Changes detected in the workspace. Staging all changes..."
+             # Stage ALL changes made by the CLI in the workspace
+             git add .
+          else
+             echo "No file changes detected after running @openai/codex CLI."
+             # If no changes, we don't need to commit or PR.
+             echo "::set-output name=changes_detected::false"
+             exit 0 # Exit successfully, skipping commit and PR
+          fi
+
+          # Only proceed if changes were detected and staged
+          echo "Committing changes..."
+          # Commit message reflects the AI action based on the prompt
+          git commit -m "feat: Apply AI changes via @openai/codex CLI" -m "Instruction: ${{ github.event.inputs.prompt }}"
+          echo "Pushing changes to new branch $NEW_BRANCH_NAME..."
+          git push origin $NEW_BRANCH_NAME
+          echo "::set-output name=changes_detected::true"
+          echo "::set-output name=new_branch::$NEW_BRANCH_NAME" # Pass branch name to next step
+
+      # 6. Create Pull Request (Conditional)
+      #    Only run this step if the previous step detected and pushed changes.
+      - name: Create Pull Request
+        if: steps.commit_push.outputs.changes_detected == 'true'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} # Use the built-in token
+          GH_REPO: ${{ github.repository }} # Get repo name dynamically
+          NEW_BRANCH: ${{ steps.commit_push.outputs.new_branch }} # Get branch name from previous step
+        run: |
+          echo "Creating Pull Request for branch $NEW_BRANCH..."
+          gh pr create \
+            --base "${{ github.event.inputs.branch_name }}" \
+            --head "$NEW_BRANCH" \
+            --title "AI Proposed Changes (@openai/codex CLI)" \
+            --body "This PR was automatically generated by a GitHub Action using the experimental \`@openai/codex\` Node.js CLI. \n\n**Instruction:** '${{ github.event.inputs.prompt }}'\n**Approval Mode:** ${{ github.event.inputs.approval_mode }}\n\nPlease review the changes carefully."
+
