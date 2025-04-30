@@ -108,7 +108,7 @@ runs:
         NEW_BRANCH_NAME="ai-codexcli-${GITHUB_RUN_ID:-$(date +%s)}"
         git checkout -b $NEW_BRANCH_NAME
 
-        if git status --porcelain | grep -qE '^[ MADRCU]'; then
+        if git status --porcelain | grep -qE '^[ MADRCU]|^\?\?'; then
           echo "Changes detected in the workspace. Staging all changes..."
           git add .
           echo "changes_detected=true" >> $GITHUB_OUTPUT
