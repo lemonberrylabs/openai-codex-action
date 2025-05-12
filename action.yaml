@@ -71,6 +71,7 @@ runs:
       shell: bash
       env:
         CODEX_QUIET_MODE: 1
+        CODEX_UNSAFE_ALLOW_NO_SANDBOX: 1
       run: |
         echo "Running @openai/codex CLI..."
         echo "Prompt: ${{ inputs.prompt }}"
